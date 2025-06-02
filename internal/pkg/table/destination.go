@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 
 	"github.com/osrg/gobgp/v4/pkg/config/oc"
@@ -238,7 +239,7 @@ func (dest *Destination) Calculate(logger log.Logger, newPath *Path) *Update {
 		}
 	} else {
 		dest.implicitWithdraw(logger, newPath)
-		dest.knownPathList = append(dest.knownPathList, newPath)
+		dest.insertSort(newPath)
 	}
 
 	for _, path := range dest.knownPathList {
@@ -251,8 +252,6 @@ func (dest *Destination) Calculate(logger log.Logger, newPath *Path) *Update {
 			path.GetNlri().SetPathLocalIdentifier(uint32(id))
 		}
 	}
-	// Compute new best path
-	dest.computeKnownBestPath()
 
 	l := make([]*Path, len(dest.knownPathList))
 	copy(l, dest.knownPathList)
@@ -345,36 +344,97 @@ func (dest *Destination) implicitWithdraw(logger log.Logger, newPath *Path) {
 	}
 }
 
-func (dest *Destination) computeKnownBestPath() (*Path, BestPathReason, error) {
-	if SelectionOptions.DisableBestPathSelection {
-		return nil, BPR_DISABLED, nil
-	}
+func (dest *Destination) insertSort(newPath *Path) {
+	n := len(dest.knownPathList)
+	insertIdx := n // default to append at end
 
-	// If we do not have any paths to this destination, then we do not have
-	// new best path.
-	if len(dest.knownPathList) == 0 {
-		return nil, BPR_UNKNOWN, nil
-	}
+	// Find the correct position for newPath
+	for i := 0; i < n; i++ {
+		// Use the same comparison logic as in sort()
+		// (You may want to refactor this into a compare function for DRY)
+		path1 := newPath
+		path2 := dest.knownPathList[i]
 
-	// We pick the first path as current best path. This helps in breaking
-	// tie between two new paths learned in one cycle for which best-path
-	// calculation steps lead to tie.
-	if len(dest.knownPathList) == 1 {
-		// If the first path has the invalidated next-hop, which evaluated by
-		// IGP, returns no path with the reason of the next-hop reachability.
-		if dest.knownPathList[0].IsNexthopInvalid {
-			return nil, BPR_REACHABLE_NEXT_HOP, nil
+		if b := compareByLLGRStaleCommunity(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
 		}
-		return dest.knownPathList[0], BPR_ONLY_PATH, nil
+
+		if b := compareByReachableNexthop(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByLocalPref(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByLocalOrigin(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByASPath(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByOrigin(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByMED(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByASNumber(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByAge(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b, _ := compareByRouterID(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
+
+		if b := compareByNeighborAddress(path1, path2); b == path1 {
+			insertIdx = i
+			break
+		} else if b == path2 {
+			continue
+		}
 	}
-	reason := dest.sort()
-	newBest := dest.knownPathList[0]
-	// If the first path has the invalidated next-hop, which evaluated by IGP,
-	// returns no path with the reason of the next-hop reachability.
-	if dest.knownPathList[0].IsNexthopInvalid {
-		return nil, BPR_REACHABLE_NEXT_HOP, nil
-	}
-	return newBest, reason, nil
+
+	// Insert at the found position
+	dest.knownPathList = slices.Insert(dest.knownPathList, insertIdx, newPath)
 }
 
 func (dst *Destination) sort() BestPathReason {
